@@ -1,26 +1,22 @@
 package coffeeshout.lab;
 
 import java.util.Date;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ScheduledFuture;
 import org.springframework.scheduling.TaskScheduler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-class Task {
-    private Long id;
+public class Task {
+    private static final Logger logger = LoggerFactory.getLogger(Task.class);
+    private final Long id;
     private final Runnable runnable;
     private final Long duration;
-    private Task nextTask = null;
 
     public Task(Long id, Runnable runnable, Long duration) {
         this.id = id;
         this.runnable = runnable;
         this.duration = duration;
-    }
-
-    public Task append(Task nextTask) {
-        this.nextTask = nextTask;
-        return nextTask;
     }
 
     @Override
@@ -43,29 +39,30 @@ class Task {
         return this.id;
     }
 
-    public Task getNextTask() {
-        if (nextTask == null) {
-            throw new IllegalStateException("다음 작업이 없습니다.");
-        }
-        return nextTask;
-    }
-
-    public boolean hasNextTask() {
-        return nextTask != null;
-    }
-
-    public ScheduledFuture<?> start(TaskExecutor executor, Map<Long, ScheduledFuture<?>> futures) {
+    public ScheduledFuture<?> execute(TaskScheduler scheduler, Runnable onComplete) {
         Runnable taskRunnable = () -> {
-            runnable.run();
-            if (hasNextTask()) {
-                ScheduledFuture<?> schedule = getNextTask().start(executor, futures);
-                executor.setCurrentTask(getNextTask());
-                futures.put(getNextTask().getId(), schedule);
+            try {
+                logger.debug("Executing task: {}", id);
+                runnable.run();
+            } catch (Exception e) {
+                logger.error("Task {} execution failed: {}", id, e.getMessage(), e);
+            } finally {
+                if (onComplete != null) {
+                    onComplete.run();
+                }
             }
         };
-        return executor.scheduler.schedule(
+        return scheduler.schedule(
                 taskRunnable,
                 new Date(System.currentTimeMillis() + duration).toInstant()
         );
+    }
+
+    public Runnable getRunnable() {
+        return runnable;
+    }
+
+    public Long getDuration() {
+        return duration;
     }
 }

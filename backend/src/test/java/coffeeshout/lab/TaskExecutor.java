@@ -1,42 +1,104 @@
 package coffeeshout.lab;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledFuture;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public class TaskExecutor<T> {
+public class TaskExecutor {
+    private static final Logger logger = LoggerFactory.getLogger(TaskExecutor.class);
 
-    TaskScheduler scheduler = new ThreadPoolTaskScheduler() {{
+    private final TaskScheduler scheduler = new ThreadPoolTaskScheduler() {{
         this.setPoolSize(1);
         this.setThreadNamePrefix("my-task-");
         this.initialize();
     }};
-    private final Map<Long, ScheduledFuture<?>> futures = new HashMap<>();
+    private final Queue<Task> taskQueue = new ConcurrentLinkedQueue<>();
+    private final Map<Long, ScheduledFuture<?>> futures = new ConcurrentHashMap<>();
+    private volatile boolean isRunning = false;
 
-    private Task currentTask;
-
-    public TaskExecutor(Task firstTask) {
-        this.currentTask = firstTask;
+    public TaskExecutor() {
+        // 빈 생성자
     }
 
-    public void start() {
-        ScheduledFuture<?> future = currentTask.start(this, futures);
-        futures.put(currentTask.getId(), future);
-    }
-
-    // 현재 실행중인 future 취소 후 다음 작업이 현재 작업이 된다.
-    public void cancelCurrentFuture(Task targetTask) {
-        ScheduledFuture<?> targetFuture = futures.get(targetTask.getId());
-        if (targetFuture == null) {
-            throw new IllegalStateException("아직 시작되지 않은 작업입니다.");
+    public TaskExecutor(Task... tasks) {
+        for (Task task : tasks) {
+            addTask(task);
         }
-        targetFuture.cancel(false);
-        currentTask = currentTask.getNextTask();
     }
 
-    public void setCurrentTask(Task nextTask) {
-        this.currentTask = nextTask;
+    public synchronized void addTask(Task task) {
+        taskQueue.offer(task);
+        logger.debug("Task {} added to queue", task.getId());
+        if (!isRunning) {
+            processNextTask();
+        }
+    }
+
+    public synchronized void start() {
+        if (!isRunning) {
+            isRunning = true;
+            processNextTask();
+        }
+    }
+
+    public synchronized void cancelTask(Long taskId) {
+        // 실행 중인 작업 취소
+        ScheduledFuture<?> future = futures.get(taskId);
+        if (future != null && !future.isDone()) {
+            future.cancel(false);
+            futures.remove(taskId);
+            logger.debug("Task {} cancelled", taskId);
+        }
+        
+        // 큐에서 대기 중인 작업 제거
+        taskQueue.removeIf(task -> task.getId().equals(taskId));
+        
+        // 다음 작업 처리
+        processNextTask();
+    }
+
+    private void processNextTask() {
+        Task nextTask = taskQueue.poll();
+        if (nextTask != null) {
+            logger.debug("Processing task: {}", nextTask.getId());
+            ScheduledFuture<?> future = nextTask.execute(scheduler, () -> {
+                futures.remove(nextTask.getId());
+                cleanupFinishedFutures();
+                processNextTask(); // 완료 후 다음 작업 처리
+            });
+            futures.put(nextTask.getId(), future);
+        } else {
+            isRunning = false;
+            logger.debug("No more tasks to process");
+        }
+    }
+
+    public synchronized void shutdown() {
+        isRunning = false;
+        taskQueue.clear();
+        futures.values().forEach(future -> future.cancel(false));
+        futures.clear();
+        if (scheduler instanceof ThreadPoolTaskScheduler) {
+            ((ThreadPoolTaskScheduler) scheduler).shutdown();
+        }
+        logger.info("TaskExecutor shutdown completed");
+    }
+
+    public void cleanupFinishedFutures() {
+        futures.entrySet().removeIf(entry -> entry.getValue().isDone());
+    }
+
+    public int getQueueSize() {
+        return taskQueue.size();
+    }
+
+    public int getActiveTaskCount() {
+        return (int) futures.values().stream().filter(f -> !f.isDone()).count();
     }
 }

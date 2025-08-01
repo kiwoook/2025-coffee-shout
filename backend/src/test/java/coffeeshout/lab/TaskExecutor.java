@@ -10,14 +10,12 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+
 public class TaskExecutor {
     private static final Logger logger = LoggerFactory.getLogger(TaskExecutor.class);
 
-    private final TaskScheduler scheduler = new ThreadPoolTaskScheduler() {{
-        this.setPoolSize(1);
-        this.setThreadNamePrefix("my-task-");
-        this.initialize();
-    }};
+    // 대충 Spring이 TaskScheduler 를 처리할 수 있도록 함
+    private TaskScheduler scheduler;
     private final Queue<Task> taskQueue = new ConcurrentLinkedQueue<>();
     private final Map<Long, ScheduledFuture<?>> futures = new ConcurrentHashMap<>();
     private volatile boolean isRunning = false;
@@ -47,7 +45,8 @@ public class TaskExecutor {
         }
     }
 
-    public synchronized void cancelTask(Long taskId) {
+    // 아마 취소를 하게 된다면 현재 큐에 있는 것을 취소하지 않을까 
+    public synchronized void cancel() {
         // 실행 중인 작업 취소
         ScheduledFuture<?> future = futures.get(taskId);
         if (future != null && !future.isDone()) {

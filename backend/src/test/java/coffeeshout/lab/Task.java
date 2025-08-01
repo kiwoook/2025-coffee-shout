@@ -9,6 +9,8 @@ import org.slf4j.LoggerFactory;
 
 public class Task {
     private static final Logger logger = LoggerFactory.getLogger(Task.class);
+
+    // Task 에서의 ID 값이 충돌날 수 있는데 어떻게 할건가 Service에서 AtomicInteger을 부여해서 처리할 것인가?
     private final Long id;
     private final Runnable runnable;
     private final Long duration;
